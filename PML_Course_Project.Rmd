@@ -1,0 +1,136 @@
+**John Hopkins Practical Machine learning Course Project**
+-----------------------------------------------------------
+####Marnus Olivier
+*July 2015*
+
+##Introduction 
+
+The data for this project consists of accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information regarding the experiment is available at http://groupware.les.inf.puc-rio.br/har. 
+
+The goal is to predict the manner in which they did the exercise. This is the "classe" variable in the training set that can be obtained from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv. 
+This report describes how the model was built, how cross validation was used and what the expected out of sample error is. The final prediction model was used to predict 20 different test (or validation) cases available at https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv. 
+
+##Data cleaning and preparation
+
+Prior to reading the downloaded data from the above the links, the working directory needs to be set to the location that contains a folder 
+called data containing the two csv files. The seed was assigned and the caret package was used to create predictive models and the doParalles package was used to speed up processing time. 
+
+```{r,warning=FALSE,message=FALSE}
+setwd("C:/Users/212410226/Python & R/RTrainingDirectory/7. Practical machine learning/Project")
+set.seed(1234)
+library(caret)
+library(doParallel)
+registerDoParallel()
+```
+
+The following script reads the training and testing csv files and assigns them to variables **train_test** and **valid**, respectively. The training csv files was split into a training and testing set for cross validation and developing a model while the testing csv file (20 different cases) was used as for validation at the end. 
+
+```{r,warning=FALSE,message=FALSE}
+train_test <- read.csv('./data/pml-training.csv', stringsAsFactors = FALSE)
+valid      <- read.csv('./data/pml-testing.csv' , stringsAsFactors = FALSE)
+```
+
+The **valid** data frame had various columns containing **NA** entries. Columns containing more than 80% NA entries in the **valid** data frame as well as the following columns;
+
+* X
+* user_name
+* raw_timestamp_part_1
+* raw_timestamp_part_2
+* cvtd_timestamp
+* new_window
+* num_window
+
+was removed from both the **train_test** and **valid** data frames using the following script. The **classe** variable was converted to a factor variable while the remaining variables was converted to numeric.     
+
+```{r,warning=FALSE,message=FALSE}
+Num_NA_in_Cols     <- apply(valid,2,function(col){sum(is.na(col))})
+Cols_to_exclude    <- (Num_NA_in_Cols >= 0.8*dim(valid)[1]) | 
+                      names(valid) %in% c('X',                    'user_name', 
+                                          'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 
+                                          'new_window',           'num_window')
+
+train_test <- train_test[,!Cols_to_exclude]; train_test[,-53] <- lapply(train_test[,-53], as.numeric)
+valid      <- valid     [,!Cols_to_exclude]; valid            <- lapply(valid, as.numeric)
+
+train_test$classe <- as.factor(train_test$classe)
+```
+
+The next step is to check if any of the remaining variables can be removed due to a lack of variability using the **nearZeroVar** function.
+The following script checks all the variables and then returns the column index of the variables that has near zero variance.  
+
+```{r,warning=FALSE,message=FALSE}
+which(nearZeroVar(train_test, saveMetrics=TRUE)$nzv)
+```
+
+The output above shows that none of the variables had near zero variance so all of them was used to build the prediction model.
+
+##Prediction model development
+
+###Classification tree
+
+The first attempt was to use a classification tree. The **train_test** data frame was split up using the **createDataPartition** function with 70% of the data allocated to the training set and 30% allocated to the testing set. The data was centered and scaled as a pre-processing step and cross validation was used for the trainControl argument. The out of sample error on the testing set was also calculated.    
+
+```{r,warning=FALSE,message=FALSE,cache=TRUE}
+# Create partition
+inTrain  <- createDataPartition(y=train_test$classe, p = 0.7, list = FALSE)
+training <- train_test[inTrain, ]
+testing  <- train_test[-inTrain,]
+
+# Train Model
+Classification_Tree <- train(classe~., 
+                             data       = training, 
+                             method     = 'rpart', 
+                             preProcess = c("center", "scale"),
+                             trControl  = trainControl(method = "cv", number = 4))
+
+# Cross Validation
+Tree_Accuracy   <- confusionMatrix(predict(Classification_Tree,testing) ,testing$classe)$overall[1]
+Tree_Error_rate <- 1 - Tree_Accuracy
+Tree_Error_rate[[1]]
+```
+
+The out of sample error rate using the classification tree is 50.4% which is too high. A more complicated algorithm like a random forest was attempted next to try and improve the expected out of sample error rate. 
+
+###Random Forest
+
+Due to the size of the **train_test** data frame having 52 predictors and 19622 examples, only 30% of the data was assigned to the training set and 70% to the test set to reduce the computation time of the random forest predictor. The data was scaled and centered once again with cross validation used in the **train** function. The code is shown below were the out of sample error rate is calculated as well. 
+
+```{r,warning=FALSE,message=FALSE,cache=TRUE}
+# Create partition
+inTrain  <- createDataPartition(y=train_test$classe, p = 0.3, list = FALSE)
+training <- train_test[inTrain, ]
+testing  <- train_test[-inTrain,]
+
+# Train Model
+Random_Forest       <- train(classe~., 
+                             data       = training, 
+                             method     = 'rf', 
+                             preProcess = c("center", "scale"),
+                             trControl  = trainControl(method = "cv", number = 2))
+
+# Cross Validation
+Forest_Accuracy   <- confusionMatrix(predict(Random_Forest,testing) ,testing$classe)$overall[1]
+Forest_Error_rate <- 1 - Forest_Accuracy
+Forest_Error_rate[[1]]
+```
+
+The random forest model drastically reduces the expected out of sample error rate to 1.6% and was consequently used to make predictions on the 20 provided validation/test cases.  
+
+##Prediction on 20 provided validation cases
+
+The following code shows the predicted outputs for the 20 provided cases which all turned out to be correct after submitting the text files generated using the **pml_write_files** function. 
+
+```{r,warning=FALSE,message=FALSE}
+ValidationPredictions <- predict(Random_Forest,valid)
+ValidationPredictions
+
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=paste0('./ValidationPredictions/',filename),quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+
+pml_write_files(ValidationPredictions)
+```
